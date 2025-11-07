@@ -126,8 +126,8 @@ def ensure_consistency(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # Layout superior
-st.title("Entrega 4 — Visualización e Integración (Streamlit)")
-st.caption("Explorá los datos, probá el modelo y comunicá los hallazgos con visualizaciones interactivas.")
+st.title("Predicción de Reclamos")
+st.caption("Herramienta interactiva para explorar indicadores y predecir tiempos de resolución.")
 
 # Aclaración de categorías de duración
 with st.expander("ℹ️ **Información sobre las categorías de duración**", expanded=False):
