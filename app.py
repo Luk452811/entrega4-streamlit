@@ -352,6 +352,30 @@ else:
     pred = model.predict(Xnew)[0]
     st.markdown(f"### 🧩 Predicción: **{pred}**")
 
+    # Mensaje personalizado según la categoría predicha
+    if pred == "Rápida":
+        st.success("""
+        **✅ Tu reclamo será procesado rápidamente**
+        
+        Según los datos históricos, tu trámite se resolverá del mismo día hasta 6 días. 
+        Esto significa que tu reclamo será atendido en un tiempo relativamente corto.
+        """)
+    elif pred == "Normal":
+        st.info("""
+        **⏱️ Tu reclamo será procesado en tiempo normal**
+        
+        Según los datos históricos, tu trámite se resolverá entre 6 y 21 días. 
+        Este es el tiempo de procesamiento estándar para tu tipo de reclamo.
+        """)
+    elif pred == "Lenta":
+        st.warning("""
+        **⚠️ Tu reclamo puede tardar más tiempo en procesarse**
+        
+        Según los datos históricos, tu trámite puede tomar más de 21 días en resolverse. 
+        Te recomendamos estar atento al seguimiento de tu reclamo y considerar contactar 
+        nuevamente si el tiempo se extiende más de lo esperado.
+        """)
+
     # Mostrar probabilidades si el modelo las tiene
     if hasattr(model, "predict_proba"):
         proba = model.predict_proba(Xnew)[0]
