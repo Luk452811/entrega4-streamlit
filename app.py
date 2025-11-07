@@ -132,7 +132,7 @@ st.caption("Herramienta interactiva para explorar indicadores y predecir tiempos
 # Aclaración de categorías de duración
 with st.expander("ℹ️ **Información sobre las categorías de duración**", expanded=False):
     st.markdown("""
-    Las categorías de tiempo de entrega se definen de la siguiente manera:
+    Las categorías de estimación de tiempo de resolución se definen de la siguiente manera:
     - **Rápida**: del mismo día a 6 días (0-6 días)
     - **Normal**: de 6 a 21 días (6-21 días)
     - **Lenta**: más de 21 días (>21 días)
