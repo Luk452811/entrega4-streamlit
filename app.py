@@ -4,417 +4,793 @@ import numpy as np
 import joblib
 import altair as alt
 from pathlib import Path
+from datetime import datetime
 import sklearn.compose._column_transformer as ct_module
+from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+import gdown
+import os
 
 st.set_page_config(page_title="Entrega 4 · Visualización e Integración", layout="wide")
 
 # Config & helpers
-DATA_FILE = "df_viz_for_streamlit.csv"
-MODEL_FILE = "model.pkl"
-FEATURES = ['situacion', 'servicio', 'sector_localidad', 'duracion_situacion', 'duracion_localidad']
+DATA_FILE = "reclamos_enriquecido.csv"
+DATA_DRIVE_ID = "1fNAxYtPhs9dpUTcDthlcAZQnTEs1JUw7"  # ID del CSV en Google Drive
+MODEL_FILE = "modelo_final_rfFINAL.joblib"
+MODEL_DRIVE_ID = "16PZo_3_Fv7s42OuvCEDqf_EQT_PDysCG"  # ID del modelo en Google Drive
 TARGET = 'categoria_duracion'
 CATS = ['Rápida', 'Normal', 'Lenta']  # mantener consistencia de colores/orden
-# Categorías de duración:
-# - Rápida: del mismo día a 6 días (0-6 días)
-# - Normal: de 6 a 21 días (6-21 días)
-# - Lenta: más de 21 días (>21 días)
+
+# Features que usa el modelo (según entrega_4_1.py)
+FEATURES_CATEGORICAS = ['servicio', 'situacion', 'duracion_situacion', 'sector_localidad', 'duracion_localidad']
+FEATURES_TEMPORALES = [
+    'mes_sin', 'mes_cos',
+    'dia_semana_sin', 'dia_semana_cos',
+    'hora_sin', 'hora_cos',
+    'dia_año_sin', 'dia_año_cos',
+    'es_fin_de_semana', 'trimestre_del_año'
+]
+FEATURES_CARGA_OPERATIVA = [
+    'carga_servicio_hora',
+    'carga_servicio_dia',
+    'carga_servicio_semana',
+    'carga_servicio_mes',
+    'carga_servicio_localidad_dia',
+    'carga_servicio_situacion_dia'
+]
+SIM_FEATURES = FEATURES_CATEGORICAS + FEATURES_TEMPORALES + FEATURES_CARGA_OPERATIVA
+
+# Categorías de duración según entrega_4_1.py:
+# - Rápida: menos de 4 días (0-4 días)
+# - Normal: entre 4 y 12 días (4-12 días)
+# - Lenta: más de 12 días (>12 días)
 
 # Workaround para compatibilidad de versiones de scikit-learn
-# Define _RemainderColsList si no existe (para modelos guardados con versiones anteriores)
 if not hasattr(ct_module, '_RemainderColsList'):
     class _RemainderColsList(list):
         """Clase stub para compatibilidad con modelos guardados con versiones anteriores de scikit-learn."""
         pass
     ct_module._RemainderColsList = _RemainderColsList
 
-# Función necesaria para cargar el modelo (usada durante el entrenamiento)
-def to_numeric_coerce(series):
-    """Convierte una serie, DataFrame o array a numérico con coerción de errores."""
-    import sys
-    
-    # DEBUG: Ver qué tipo de dato recibimos
-    try:
-        debug_info = f"DEBUG to_numeric_coerce: type={type(series)}, isinstance(ndarray)={isinstance(series, np.ndarray)}, isinstance(Series)={isinstance(series, pd.Series)}, isinstance(DataFrame)={isinstance(series, pd.DataFrame)}"
-        if isinstance(series, np.ndarray):
-            debug_info += f", shape={series.shape}, ndim={series.ndim}, dtype={series.dtype}"
-        print(debug_info, file=sys.stderr)
-    except:
-        pass
-    
-    # Si es un DataFrame, aplicar a cada columna
-    if isinstance(series, pd.DataFrame):
-        return series.apply(lambda col: pd.to_numeric(col, errors='coerce'))
-    
-    # Convertir todo lo demás a lista 1D primero
-    try:
-        # Si es un array de numpy
-        if isinstance(series, np.ndarray):
-            # Aplanar completamente
-            arr_flat = series.ravel()
-            # Convertir a lista Python
-            series_list = arr_flat.tolist()
-            print(f"DEBUG: Converted numpy array to list, length={len(series_list)}", file=sys.stderr)
-        # Si es una Serie
-        elif isinstance(series, pd.Series):
-            # Convertir a lista
-            series_list = series.tolist()
-            print(f"DEBUG: Converted Series to list, length={len(series_list)}", file=sys.stderr)
-        # Si es lista o tupla
-        elif isinstance(series, (list, tuple)):
-            series_list = list(series)
-            print(f"DEBUG: Converted list/tuple to list, length={len(series_list)}", file=sys.stderr)
-        # Para cualquier otro tipo iterable
-        else:
-            # Intentar convertir a lista
-            series_list = list(series)
-            print(f"DEBUG: Converted other iterable to list, length={len(series_list)}", file=sys.stderr)
-        
-        # Crear Serie desde la lista y convertir a numérico
-        # Esto siempre funciona porque pd.Series acepta listas
-        print(f"DEBUG: Creating Series from list...", file=sys.stderr)
-        series_obj = pd.Series(series_list)
-        print(f"DEBUG: Calling pd.to_numeric on Series...", file=sys.stderr)
-        result = pd.to_numeric(series_obj, errors='coerce')
-        print(f"DEBUG: Success! Result type={type(result)}", file=sys.stderr)
-        return result
-        
-    except Exception as e:
-        # Si todo falla, intentar directamente con pd.to_numeric
-        # pero primero asegurarse de que sea una lista
-        print(f"DEBUG: Exception in main try block: {type(e).__name__}: {e}", file=sys.stderr)
-        try:
-            # Forzar conversión a lista
-            if hasattr(series, '__iter__') and not isinstance(series, str):
-                # Intentar múltiples métodos de conversión
-                try:
-                    flat_list = list(series)
-                    print(f"DEBUG: Fallback: converted to list via list(), length={len(flat_list)}", file=sys.stderr)
-                except Exception as e2:
-                    print(f"DEBUG: list() failed: {e2}", file=sys.stderr)
-                    try:
-                        flat_list = [x for x in series]
-                        print(f"DEBUG: Fallback: converted to list via comprehension, length={len(flat_list)}", file=sys.stderr)
-                    except Exception as e3:
-                        print(f"DEBUG: comprehension failed: {e3}", file=sys.stderr)
-                        # Último recurso: convertir a array numpy y luego a lista
-                        flat_list = np.array(series).ravel().tolist()
-                        print(f"DEBUG: Fallback: converted via numpy array, length={len(flat_list)}", file=sys.stderr)
-                
-                print(f"DEBUG: Fallback: Creating Series and calling pd.to_numeric...", file=sys.stderr)
-                return pd.to_numeric(pd.Series(flat_list), errors='coerce')
-            else:
-                # Si no es iterable, intentar directamente
-                print(f"DEBUG: Fallback: Not iterable, trying pd.to_numeric directly...", file=sys.stderr)
-                return pd.to_numeric(series, errors='coerce')
-        except Exception as e4:
-            # Si todo falla, devolver como está
-            print(f"DEBUG: All fallbacks failed: {type(e4).__name__}: {e4}", file=sys.stderr)
-            return series
-
+# Funciones auxiliares
 @st.cache_data
 def load_df(path: str):
     return pd.read_csv(path)
 
+def download_from_drive(file_id: str, output_path: str, file_type: str = "archivo"):
+    """Descarga un archivo desde Google Drive"""
+    try:
+        url = f"https://drive.google.com/uc?id={file_id}"
+        gdown.download(url, output_path, quiet=False)
+        return True
+    except Exception as e:
+        st.error(f"❌ Error al descargar el {file_type}: {str(e)}")
+        return False
+
 @st.cache_resource
-def load_model(path: str):
+def load_model_cached(path: str):
+    """Carga el modelo desde el archivo local"""
     return joblib.load(path)
 
 def ensure_consistency(df: pd.DataFrame) -> pd.DataFrame:
-    # normalizamos nombres del target por seguridad
+    """Normaliza nombres del target por seguridad"""
     if TARGET in df.columns:
         df[TARGET] = df[TARGET].replace({'rápida':'Rápida','normal':'Normal','lenta':'Lenta'})
     return df
 
+def preprocess_for_prediction(df: pd.DataFrame, servicio: str, situacion: str, 
+                               sector_localidad: str, fecha_ingreso: datetime) -> pd.DataFrame:
+    """Preprocesa los datos para la predicción usando valores históricos del dataset"""
+    # Buscar un registro similar en el dataset para obtener valores representativos
+    base = df[
+        (df['servicio'] == servicio) &
+        (df['situacion'] == situacion) &
+        (df['sector_localidad'] == sector_localidad)
+    ].copy()
+    
+    if base.empty:
+        # Si no hay coincidencia exacta, buscar por servicio y situación
+        base = df[
+            (df['servicio'] == servicio) &
+            (df['situacion'] == situacion)
+        ].copy()
+    
+    if base.empty:
+        # Si aún no hay coincidencia, usar cualquier registro del servicio
+        base = df[df['servicio'] == servicio].copy()
+    
+    if base.empty:
+        # Último recurso: usar cualquier registro
+        base = df.sample(1).copy()
+    
+    # Procesar fecha_ingreso para crear features temporales
+    fecha_dt = pd.to_datetime(fecha_ingreso, errors='coerce')
+    if pd.isna(fecha_dt):
+        fecha_dt = pd.Timestamp.now()
+    
+    dia_de_la_semana = fecha_dt.dayofweek
+    hora_del_dia = fecha_dt.hour
+    dia_del_año = fecha_dt.dayofyear
+    es_fin_de_semana = 1 if dia_de_la_semana >= 5 else 0
+    trimestre_del_año = fecha_dt.quarter
+    mes = fecha_dt.month
+    
+    # Codificación cíclica
+    mes_sin = np.sin(2 * np.pi * mes / 12)
+    mes_cos = np.cos(2 * np.pi * mes / 12)
+    dia_semana_sin = np.sin(2 * np.pi * dia_de_la_semana / 7)
+    dia_semana_cos = np.cos(2 * np.pi * dia_de_la_semana / 7)
+    hora_sin = np.sin(2 * np.pi * hora_del_dia / 24)
+    hora_cos = np.cos(2 * np.pi * hora_del_dia / 24)
+    dia_año_normalizado = dia_del_año / 365.25
+    dia_año_sin = np.sin(2 * np.pi * dia_año_normalizado)
+    dia_año_cos = np.cos(2 * np.pi * dia_año_normalizado)
+    
+    # Carga operativa: usar valores históricos del dataset o calcular desde el dataset
+    hora = fecha_dt.floor('h')
+    fecha_dia = fecha_dt.date()
+    semana = fecha_dt.isocalendar().week
+    
+    # Intentar calcular cargas operativas desde el dataset histórico
+    try:
+        df_fecha = pd.to_datetime(df['fecha_ingreso'], errors='coerce')
+        carga_servicio_hora = len(df[(df['servicio'] == servicio) & (df_fecha.dt.floor('h') == hora)])
+        carga_servicio_dia = len(df[(df['servicio'] == servicio) & (df_fecha.dt.date == fecha_dia)])
+        carga_servicio_semana = len(df[(df['servicio'] == servicio) & (df_fecha.dt.isocalendar().week == semana)])
+        carga_servicio_mes = len(df[(df['servicio'] == servicio) & (df_fecha.dt.month == mes)])
+        carga_servicio_localidad_dia = len(df[(df['servicio'] == servicio) & (df['sector_localidad'] == sector_localidad) & (df_fecha.dt.date == fecha_dia)])
+        carga_servicio_situacion_dia = len(df[(df['servicio'] == servicio) & (df['situacion'] == situacion) & (df_fecha.dt.date == fecha_dia)])
+    except:
+        # Si falla, usar valores medianos del dataset base
+        carga_servicio_hora = base['carga_servicio_hora'].median() if 'carga_servicio_hora' in base.columns and not base['carga_servicio_hora'].isna().all() else 1
+        carga_servicio_dia = base['carga_servicio_dia'].median() if 'carga_servicio_dia' in base.columns and not base['carga_servicio_dia'].isna().all() else 1
+        carga_servicio_semana = base['carga_servicio_semana'].median() if 'carga_servicio_semana' in base.columns and not base['carga_servicio_semana'].isna().all() else 1
+        carga_servicio_mes = base['carga_servicio_mes'].median() if 'carga_servicio_mes' in base.columns and not base['carga_servicio_mes'].isna().all() else 1
+        carga_servicio_localidad_dia = base['carga_servicio_localidad_dia'].median() if 'carga_servicio_localidad_dia' in base.columns and not base['carga_servicio_localidad_dia'].isna().all() else 1
+        carga_servicio_situacion_dia = base['carga_servicio_situacion_dia'].median() if 'carga_servicio_situacion_dia' in base.columns and not base['carga_servicio_situacion_dia'].isna().all() else 1
+    
+    # Obtener valores de duracion_situacion y duracion_localidad del dataset
+    duracion_situacion_val = base['duracion_situacion'].mode().iloc[0] if 'duracion_situacion' in base.columns and not base['duracion_situacion'].mode().empty else df['duracion_situacion'].mode().iloc[0] if 'duracion_situacion' in df.columns and not df['duracion_situacion'].mode().empty else 'NORMAL'
+    duracion_localidad_val = base['duracion_localidad'].mode().iloc[0] if 'duracion_localidad' in base.columns and not base['duracion_localidad'].mode().empty else df['duracion_localidad'].mode().iloc[0] if 'duracion_localidad' in df.columns and not df['duracion_localidad'].mode().empty else 'RÁPIDA'
+    
+    # Crear DataFrame con todas las features
+    nuevo = pd.DataFrame([{
+        'servicio': servicio,
+        'situacion': situacion,
+        'duracion_situacion': duracion_situacion_val,
+        'sector_localidad': sector_localidad,
+        'duracion_localidad': duracion_localidad_val,
+        'mes_sin': mes_sin,
+        'mes_cos': mes_cos,
+        'dia_semana_sin': dia_semana_sin,
+        'dia_semana_cos': dia_semana_cos,
+        'hora_sin': hora_sin,
+        'hora_cos': hora_cos,
+        'dia_año_sin': dia_año_sin,
+        'dia_año_cos': dia_año_cos,
+        'es_fin_de_semana': es_fin_de_semana,
+        'trimestre_del_año': trimestre_del_año,
+        'carga_servicio_hora': carga_servicio_hora,
+        'carga_servicio_dia': carga_servicio_dia,
+        'carga_servicio_semana': carga_servicio_semana,
+        'carga_servicio_mes': carga_servicio_mes,
+        'carga_servicio_localidad_dia': carga_servicio_localidad_dia,
+        'carga_servicio_situacion_dia': carga_servicio_situacion_dia
+    }])
+    
+    return nuevo[SIM_FEATURES]
+
+def clasificar_por_num(valor):
+    """Clasifica por número de días según cortes (0-4-12-inf)"""
+    try:
+        v = float(valor)
+    except:
+        return None
+    if v <= 4:
+        return 'Rápida'
+    if v <= 12:
+        return 'Normal'
+    return 'Lenta'
+
+# ==========================================================
+# 🚀 APLICACIÓN PRINCIPAL
+# ==========================================================
+
 # Layout superior
-st.title("Predicción de Reclamos")
+st.title("📊 Sistema de Predicción de Reclamos")
 st.caption("Herramienta interactiva para explorar indicadores y predecir tiempos de resolución.")
 
-# Aclaración de categorías de duración
-with st.expander("ℹ️ **Información sobre las categorías de duración**", expanded=False):
-    st.markdown("""
-    Las categorías de estimación de tiempo de resolución se definen de la siguiente manera:
-    - **Rápida**: del mismo día a 6 días (0-6 días)
-    - **Normal**: de 6 a 21 días (6-21 días)
-    - **Lenta**: más de 21 días (>21 días)
-    """)
-
-# Cargar datos/modelo o permitir carga manual
+# Cargar datos/modelo
 data_path = Path(DATA_FILE)
 model_path = Path(MODEL_FILE)
 
 col_up1, col_up2 = st.columns(2)
 with col_up1:
+    # Cargar CSV (descargar desde Drive si no existe)
     if not data_path.exists():
-        st.warning(f"No se encontró **{DATA_FILE}**. Subí el CSV:")
-        up = st.file_uploader("Subí df_viz_for_streamlit.csv", type=["csv"], key="csv")
-        if up:
-            df = pd.read_csv(up)
-        else:
-            st.stop()
+        st.info(f"📥 **{DATA_FILE}** no encontrado. Descargando desde Google Drive...")
+        with st.spinner("Descargando CSV (esto puede tardar unos minutos debido al tamaño del archivo)..."):
+            if download_from_drive(DATA_DRIVE_ID, DATA_FILE, "CSV"):
+                st.success(f"✅ CSV descargado exitosamente!")
+                df = load_df(str(data_path))
+            else:
+                st.error("❌ No se pudo descargar el CSV. Verifica tu conexión a internet.")
+                st.stop()
     else:
         df = load_df(str(data_path))
 
 with col_up2:
+    # Cargar modelo (descargar desde Drive si no existe)
     if not model_path.exists():
-        st.warning(f"No se encontró **{MODEL_FILE}**. Subí el modelo (.pkl) para habilitar predicción:")
-        upm = st.file_uploader("Subí model.pkl", type=["pkl"], key="pkl")
-        model = load_model(upm) if upm else None
+        st.info(f"📥 **{MODEL_FILE}** no encontrado. Descargando desde Google Drive...")
+        with st.spinner("Descargando modelo (esto puede tardar varios minutos debido al tamaño del archivo ~1GB)..."):
+            if download_from_drive(MODEL_DRIVE_ID, MODEL_FILE, "modelo"):
+                st.success(f"✅ Modelo descargado exitosamente!")
+                model = load_model_cached(str(model_path))
+            else:
+                st.error("❌ No se pudo descargar el modelo. Verifica tu conexión a internet.")
+                model = None
     else:
-        model = load_model(str(model_path))
+        try:
+            model = load_model_cached(str(model_path))
+        except Exception as e:
+            st.error(f"❌ Error al cargar el modelo: {str(e)}")
+            model = None
 
 df = ensure_consistency(df)
 
 # Validaciones rápidas
-missing = [c for c in FEATURES if c not in df.columns]
+required_cols = ['servicio', 'situacion', 'sector_localidad', 'categoria_duracion', 'fecha_ingreso']
+missing = [c for c in required_cols if c not in df.columns]
 if missing:
     st.error(f"Faltan columnas en el CSV: {missing}")
     st.stop()
-if TARGET not in df.columns:
-    st.error(f"Falta la columna objetivo '{TARGET}' en el CSV.")
-    st.stop()
 
-# Sidebar: 3 selectboxes compartidos
-st.sidebar.header("🎛️ Controles")
+# Convertir fecha_ingreso a datetime si no lo está
+if 'fecha_ingreso' in df.columns:
+    df['fecha_ingreso'] = pd.to_datetime(df['fecha_ingreso'], errors='coerce')
+    df['anio'] = df['fecha_ingreso'].dt.year
 
-# Servicio: afecta a Viz 2, Viz 3 y Simulador
-servicio_options = sorted(df['servicio'].dropna().unique().tolist())
-servicio_sel = st.sidebar.selectbox("Servicio:", options=servicio_options, key="servicio_sel")
+# ==========================================================
+# 📑 TABS PRINCIPALES
+# ==========================================================
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🎛️ Simulador", "ℹ️ Información del Modelo"])
 
-# Localidad: afecta a Viz 1 y Simulador
-localidad_options = sorted(df['sector_localidad'].dropna().unique().tolist())
-localidad_sel = st.sidebar.selectbox("Localidad:", options=localidad_options, key="localidad_sel")
-
-# Situación: afecta a Simulador (se filtra según servicio)
-situaciones_options = sorted(df[df['servicio'] == servicio_sel]['situacion'].dropna().unique().tolist())
-situacion_sel = None
-if situaciones_options:
-    situacion_sel = st.sidebar.selectbox("Situación:", options=situaciones_options, key="situacion_sel")
-
-# Visualización 1: Torta por sector_localidad + leyenda %
-st.markdown("## 🏙️ Distribución de categorías de duración por **localidad**")
-
-base_loc = (
-    alt.Chart(df)
-    .transform_filter(alt.datum.sector_localidad == localidad_sel)
-    .transform_aggregate(
-        cantidad='count()',
-        groupby=['categoria_duracion']
-    )
-    .transform_joinaggregate(total='sum(cantidad)')
-    .transform_calculate(porcentaje="datum.cantidad / datum.total * 100")
-)
-
-pie_loc = (
-    base_loc.mark_arc(outerRadius=120)
-    .encode(
-        theta=alt.Theta('cantidad:Q'),
-        color=alt.Color('categoria_duracion:N',
-                        scale=alt.Scale(domain=CATS, range=['#2ECC71','#F1C40F','#E74C3C']),
-                        title='Categoría'),
-        tooltip=[
-            alt.Tooltip('categoria_duracion:N', title='Categoría'),
-            alt.Tooltip('porcentaje:Q', title='% dentro de la localidad', format='.1f')
-        ]
-    )
-    .properties(width=320, height=320)
-)
-
-tabla_loc = (
-    base_loc.mark_text(align='left', fontSize=14, dx=5)
-    .encode(
-        y=alt.Y('categoria_duracion:N', sort=['Lenta','Normal','Rápida'], title='Categoría'),
-        text=alt.Text('porcentaje:Q', format='.1f'),
-        color=alt.Color('categoria_duracion:N',
-                        scale=alt.Scale(domain=CATS, range=['#2ECC71','#F1C40F','#E74C3C']),
-                        legend=None)
-    )
-    .properties(width=140)
-)
-
-st.altair_chart(alt.hconcat(pie_loc, tabla_loc).resolve_legend(color='shared'), use_container_width=True)
-
-# Visualización 2: Torta por servicio + leyenda %
-st.markdown("## ⚙️ Distribución de categorías de duración por **servicio**")
-
-base_srv = (
-    alt.Chart(df)
-    .transform_filter(alt.datum.servicio == servicio_sel)
-    .transform_aggregate(
-        cantidad='count()',
-        groupby=['categoria_duracion']
-    )
-    .transform_joinaggregate(total='sum(cantidad)')
-    .transform_calculate(porcentaje="datum.cantidad / datum.total * 100")
-)
-
-pie_srv = (
-    base_srv.mark_arc(outerRadius=120)
-    .encode(
-        theta=alt.Theta('cantidad:Q'),
-        color=alt.Color('categoria_duracion:N',
-                        scale=alt.Scale(domain=CATS, range=['#2ECC71','#F1C40F','#E74C3C']),
-                        title='Categoría'),
-        tooltip=[
-            alt.Tooltip('categoria_duracion:N', title='Categoría'),
-            alt.Tooltip('porcentaje:Q', title='% dentro del servicio', format='.1f')
-        ]
-    )
-    .properties(width=320, height=320)
-)
-
-tabla_srv = (
-    base_srv.mark_text(align='left', fontSize=14, dx=5)
-    .encode(
-        y=alt.Y('categoria_duracion:N', sort=['Lenta','Normal','Rápida'], title='Categoría'),
-        text=alt.Text('porcentaje:Q', format='.1f'),
-        color=alt.Color('categoria_duracion:N',
-                        scale=alt.Scale(domain=CATS, range=['#2ECC71','#F1C40F','#E74C3C']),
-                        legend=None)
-    )
-    .properties(width=140)
-)
-
-st.altair_chart(alt.hconcat(pie_srv, tabla_srv).resolve_legend(color='shared'), use_container_width=True)
-
-# Visualización 3: Barras apiladas por situación (filtro por servicio)
-st.markdown("## 📊 Proporciones de duración por **situación** (filtrado por servicio)")
-
-bars = (
-    alt.Chart(df)
-    .transform_filter(alt.datum.servicio == servicio_sel)
-    .transform_aggregate(
-        count='count()',
-        groupby=['situacion', 'categoria_duracion']
-    )
-    .transform_joinaggregate(
-        total_situacion='sum(count)',
-        groupby=['situacion']
-    )
-    .transform_calculate(
-        porcentaje='datum.count / datum.total_situacion'
-    )
-    .mark_bar()
-    .encode(
-        y=alt.Y('situacion:N', sort='-x', title='Situación'),
-        x=alt.X('porcentaje:Q', stack='normalize', title='Proporción dentro de la situación', axis=alt.Axis(format='%')),
-        color=alt.Color('categoria_duracion:N',
-                        scale=alt.Scale(domain=CATS, range=['#2ECC71','#F1C40F','#E74C3C']),
-                        title='Categoría'),
-        tooltip=[
-            alt.Tooltip('situacion:N', title='Situación'),
-            alt.Tooltip('categoria_duracion:N', title='Categoría'),
-            alt.Tooltip('porcentaje:Q', title='Proporción', format='.1%')
-        ]
-    )
-    .properties(width=900, height=520)
-)
-st.altair_chart(bars, use_container_width=True)
-
-# Simulador: predicción con menús dependientes
-st.markdown("## 🎛️ Simulador interactivo de predicción")
-if model is None:
-    st.info("Subí **model.pkl** para habilitar el simulador.")
-elif situacion_sel is None:
-    st.info("Selecciona una situación en el sidebar para realizar la predicción.")
-else:
-    # Usar los valores compartidos del sidebar
-    # Valores por defecto usando mode() como en el notebook original
-    if 'duracion_situacion' in df.columns:
-        dur_sit_def = df['duracion_situacion'].mode().iloc[0] if len(df['duracion_situacion'].mode()) > 0 else 0.0
-        # Convertir a numérico si es necesario
-        try:
-            dur_sit_def = float(dur_sit_def)
-        except (ValueError, TypeError):
-            dur_sit_def = 0.0
-    else:
-        dur_sit_def = 0.0
+# ==========================================================
+# TAB 1: DASHBOARD
+# ==========================================================
+with tab1:
+    st.header("📊 Dashboard de Exploración de Datos")
     
-    if 'duracion_localidad' in df.columns:
-        dur_loc_def = df['duracion_localidad'].mode().iloc[0] if len(df['duracion_localidad'].mode()) > 0 else 0.0
-        # Convertir a numérico si es necesario
-        try:
-            dur_loc_def = float(dur_loc_def)
-        except (ValueError, TypeError):
-            dur_loc_def = 0.0
-    else:
-        dur_loc_def = 0.0
-
-    # Armar nuevo registro con valores por defecto (como en el notebook)
-    Xnew = pd.DataFrame([{
-        'situacion': situacion_sel,
-        'servicio': servicio_sel,
-        'sector_localidad': localidad_sel,
-        'duracion_situacion': dur_sit_def,
-        'duracion_localidad': dur_loc_def
-    }])[FEATURES]
-
-    # Realizar predicción automáticamente
-    pred = model.predict(Xnew)[0]
-    st.markdown(f"### 🧩 Predicción: **{pred}**")
-
-    # Mensaje personalizado según la categoría predicha
-    if pred == "Rápida":
-        st.success("""
-        **✅ Tu reclamo será procesado rápidamente**
-        
-        Según los datos históricos, tu trámite se resolverá del mismo día hasta 6 días. 
-        Esto significa que tu reclamo será atendido en un tiempo relativamente corto.
-        """)
-    elif pred == "Normal":
-        st.info("""
-        **⏱️ Tu reclamo será procesado en tiempo normal**
-        
-        Según los datos históricos, tu trámite se resolverá entre 6 y 21 días. 
-        Este es el tiempo de procesamiento estándar para tu tipo de reclamo.
-        """)
-    elif pred == "Lenta":
-        st.warning("""
-        **⚠️ Tu reclamo puede tardar más tiempo en procesarse**
-        
-        Según los datos históricos, tu trámite puede tomar más de 21 días en resolverse. 
-        Te recomendamos estar atento al seguimiento de tu reclamo y considerar contactar 
-        nuevamente si el tiempo se extiende más de lo esperado.
-        """)
-
-    # Mostrar probabilidades si el modelo las tiene
-    if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(Xnew)[0]
-        proba_df = pd.DataFrame({
-            'Categoría': getattr(model, "classes_", CATS),
-            'Probabilidad': proba
-        }).sort_values('Probabilidad', ascending=False)
-        
-        # Mostrar tabla con probabilidades
-        st.dataframe(
-            proba_df.assign(Probabilidad=lambda d: (d["Probabilidad"]*100).round(2).astype(str) + " %"),
-            use_container_width=True,
-            hide_index=True
+    # Filtros múltiples
+    st.subheader("🔍 Filtros")
+    col_f1, col_f2, col_f3 = st.columns(3)
+    
+    with col_f1:
+        años_disponibles = sorted(df['anio'].dropna().unique().tolist())
+        años_seleccionados = st.multiselect(
+            "Año(s):",
+            options=años_disponibles,
+            default=None,
+            key="filtro_años"
         )
+    
+    with col_f2:
+        localidades_disponibles = sorted(df['sector_localidad'].dropna().unique().tolist())
+        localidades_seleccionadas = st.multiselect(
+            "Localidad(es):",
+            options=localidades_disponibles,
+            default=None,
+            key="filtro_localidades"
+        )
+    
+    with col_f3:
+        servicios_disponibles = sorted(df['servicio'].dropna().unique().tolist())
+        servicios_seleccionados = st.multiselect(
+            "Servicio(s):",
+            options=servicios_disponibles,
+            default=None,
+            key="filtro_servicios"
+        )
+    
+    # Aplicar filtros
+    df_filtrado = df.copy()
+    if años_seleccionados:
+        df_filtrado = df_filtrado[df_filtrado['anio'].isin(años_seleccionados)]
+    if localidades_seleccionadas:
+        df_filtrado = df_filtrado[df_filtrado['sector_localidad'].isin(localidades_seleccionadas)]
+    if servicios_seleccionados:
+        df_filtrado = df_filtrado[df_filtrado['servicio'].isin(servicios_seleccionados)]
+    
+    if df_filtrado.empty:
+        st.warning("⚠️ No hay datos con los filtros seleccionados.")
+    else:
+        # KPIs
+        st.subheader("📈 Indicadores Generales")
+        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        with col_kpi1:
+            st.metric("Total Reclamos", f"{len(df_filtrado):,}")
+        with col_kpi2:
+            st.metric("Duración Promedio", f"{df_filtrado['duracion_dias'].mean():.1f} días")
+        with col_kpi3:
+            st.metric("Rápidos (%)", f"{(df_filtrado['categoria_duracion'] == 'Rápida').sum() / len(df_filtrado) * 100:.1f}%")
+        with col_kpi4:
+            st.metric("Lentos (%)", f"{(df_filtrado['categoria_duracion'] == 'Lenta').sum() / len(df_filtrado) * 100:.1f}%")
         
-        # Mostrar gráfico de torta (como en el notebook)
-        chart = (
-            alt.Chart(proba_df)
-            .mark_arc(innerRadius=50)
-            .encode(
-                theta=alt.Theta('Probabilidad:Q', stack=True),
-                color=alt.Color(
-                    'Categoría:N',
-                    scale=alt.Scale(
-                        domain=CATS,
-                        range=['#2ECC71', '#F1C40F', '#E74C3C']
-                    ),
-                    legend=alt.Legend(title="Categoría")
-                ),
-                tooltip=[
-                    'Categoría:N',
-                    alt.Tooltip('Probabilidad:Q', format='.2%', title='Probabilidad')
+        # Gráfico 1: Distribución general de categorías
+        st.subheader("🕒 Distribución general de las categorías de duración")
+        df_dist = (
+            df_filtrado['categoria_duracion']
+            .value_counts(normalize=True)
+            .rename_axis('categoria_duracion')
+            .reset_index(name='porcentaje')
+        )
+        df_dist['porcentaje'] = df_dist['porcentaje'] * 100
+        
+        chart_dist = (
+            alt.Chart(df_dist)
+            .mark_bar()
+    .encode(
+                x=alt.X('categoria_duracion:N', title='Categoría', sort=['Rápida', 'Normal', 'Lenta']),
+                y=alt.Y('porcentaje:Q', title='Porcentaje (%)'),
+        color=alt.Color('categoria_duracion:N',
+                        scale=alt.Scale(domain=CATS, range=['#2ECC71','#F1C40F','#E74C3C']),
+                                legend=None),
+        tooltip=[
+            alt.Tooltip('categoria_duracion:N', title='Categoría'),
+                    alt.Tooltip('porcentaje:Q', format=".2f", title='% del total')
                 ]
             )
-            .properties(
-                width=300,
-                height=300,
-                title="Distribución de Probabilidades de Predicción"
-            )
+            .properties(width=600, height=350, title="Distribución de reclamos según la categoría de duración")
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart_dist, use_container_width=True)
+        
+        # Gráfico 2: Análisis por categoría de duración
+        st.subheader("🔍 Análisis por categoría de duración")
+        categoria_seleccionada = st.selectbox(
+            "Selecciona una categoría para explorar qué servicios concentran más reclamos:",
+            options=sorted(df_filtrado['categoria_duracion'].dropna().unique()),
+            key="categoria_dashboard"
+        )
+        
+        df_cat = df_filtrado[df_filtrado['categoria_duracion'] == categoria_seleccionada]
+        df_servicios = (
+            df_cat['servicio']
+            .value_counts(normalize=True)
+            .rename_axis('servicio')
+            .reset_index(name='porcentaje')
+            .head(15)
+        )
+        df_servicios['porcentaje'] *= 100
+        
+        color_map = {'Rápida': '#2ECC71', 'Normal': '#F1C40F', 'Lenta': '#E74C3C'}
+        color = color_map.get(categoria_seleccionada, 'steelblue')
+        
+        chart_servicios = (
+            alt.Chart(df_servicios)
+            .mark_bar(color=color)
+            .encode(
+                x=alt.X('porcentaje:Q', title='% dentro de la categoría'),
+                y=alt.Y('servicio:N', sort='-x', title='Servicio'),
+                tooltip=[
+                    alt.Tooltip('servicio:N', title='Servicio'),
+                    alt.Tooltip('porcentaje:Q', format='.2f', title='% del total')
+                ]
+            )
+            .properties(width=700, height=400, title=f"Distribución de servicios en categoría '{categoria_seleccionada}'")
+        )
+        st.altair_chart(chart_servicios, use_container_width=True)
+        
+        # Gráfico 3: Situaciones por categoría
+        st.subheader("📋 Situaciones dentro de cada categoría de duración")
+        df_situaciones = (
+            df_cat['situacion']
+            .value_counts(normalize=True)
+            .rename_axis('situacion')
+            .reset_index(name='porcentaje')
+            .head(20)
+        )
+        df_situaciones['porcentaje'] *= 100
+        
+        chart_situaciones = (
+            alt.Chart(df_situaciones)
+            .mark_bar(color=color)
+    .encode(
+                x=alt.X('porcentaje:Q', title='% dentro de la categoría'),
+                y=alt.Y('situacion:N', sort='-x', title='Situación'),
+        tooltip=[
+                    alt.Tooltip('situacion:N', title='Situación'),
+                    alt.Tooltip('porcentaje:Q', format='.2f', title='% del total')
+                ]
+            )
+            .properties(width=700, height=450, title=f"Top situaciones en categoría '{categoria_seleccionada}'")
+        )
+        st.altair_chart(chart_situaciones, use_container_width=True)
+        
+        # Gráfico 4: Evolución temporal
+        st.subheader("📈 Evolución temporal")
+        col_ev1, col_ev2, col_ev3 = st.columns(3)
+        
+        with col_ev1:
+            loc_ev = st.selectbox("Localidad:", options=sorted(df_filtrado['sector_localidad'].dropna().unique()), key="loc_ev")
+        with col_ev2:
+            serv_ev_options = sorted(df_filtrado[df_filtrado['sector_localidad'] == loc_ev]['servicio'].dropna().unique())
+            serv_ev = st.selectbox("Servicio:", options=serv_ev_options, key="serv_ev") if serv_ev_options else None
+        with col_ev3:
+            if serv_ev:
+                sit_ev_options = sorted(df_filtrado[(df_filtrado['sector_localidad'] == loc_ev) & (df_filtrado['servicio'] == serv_ev)]['situacion'].dropna().unique())
+                sit_ev = st.selectbox("Situación:", options=sit_ev_options, key="sit_ev") if sit_ev_options else None
+            else:
+                sit_ev = None
+        
+        if loc_ev and serv_ev and sit_ev:
+            df_ev = df_filtrado[
+                (df_filtrado['sector_localidad'] == loc_ev) &
+                (df_filtrado['servicio'] == serv_ev) &
+                (df_filtrado['situacion'] == sit_ev)
+            ].copy()
+            
+            if not df_ev.empty:
+                df_anual = (
+                    df_ev.groupby('anio')['duracion_dias']
+                    .mean()
+                    .reset_index()
+                    .sort_values('anio')
+                )
+                
+                chart_ev = (
+                    alt.Chart(df_anual)
+                    .mark_line(point=True)
+    .encode(
+                        x=alt.X('anio:O', title='Año'),
+                        y=alt.Y('duracion_dias:Q', title='Duración promedio (días)'),
+                        tooltip=['anio:O', 'duracion_dias:Q']
+                    )
+                    .properties(width=700, height=350, title="Evolución de duración promedio por año")
+                )
+                st.altair_chart(chart_ev, use_container_width=True)
+        
+        # Gráfico 5: Localidades con mayor duración
+        st.subheader("🏙️ Distribución de duración por Localidad")
+        df_loc_duracion = df_filtrado.groupby('sector_localidad')['duracion_dias'].mean().reset_index().sort_values('duracion_dias', ascending=False).head(20)
+        
+        chart_loc = (
+            alt.Chart(df_loc_duracion)
+            .mark_bar()
+            .encode(
+                y=alt.Y('sector_localidad:N', sort='-x', title='Localidad'),
+                x=alt.X('duracion_dias:Q', title='Duración promedio (días)'),
+                tooltip=['sector_localidad:N', 'duracion_dias:Q']
+            )
+            .properties(width=700, height=400)
+        )
+        st.altair_chart(chart_loc, use_container_width=True)
+        
+        # Gráfico 6: Servicios más lentos
+        st.subheader("⚙️ Duración promedio por Servicio")
+        df_serv_duracion = df_filtrado.groupby('servicio')['duracion_dias'].mean().reset_index().sort_values('duracion_dias', ascending=False).head(20)
+        
+        chart_serv_duracion = (
+            alt.Chart(df_serv_duracion)
+    .mark_bar()
+    .encode(
+                y=alt.Y('servicio:N', sort='-x', title='Servicio'),
+                x=alt.X('duracion_dias:Q', title='Duración promedio (días)'),
+                tooltip=['servicio:N', 'duracion_dias:Q']
+            )
+            .properties(width=700, height=400)
+        )
+        st.altair_chart(chart_serv_duracion, use_container_width=True)
+
+# ==========================================================
+# TAB 2: SIMULADOR
+# ==========================================================
+with tab2:
+    st.header("🎛️ Simulador Interactivo de Predicción")
+    
+    if model is None:
+        st.warning("⚠️ No se encontró el modelo. Subí **model.pkl** para habilitar el simulador.")
+    else:
+        st.markdown("""
+        Completa los siguientes campos para obtener una predicción sobre el tiempo de resolución de tu reclamo.
+        """)
+        
+        col_sim1, col_sim2 = st.columns(2)
+        
+        with col_sim1:
+            servicio_sim = st.selectbox(
+                "Servicio:",
+                options=sorted(df['servicio'].dropna().unique()),
+                key="servicio_sim"
+            )
+            
+            # Filtrar situaciones según servicio
+            situaciones_sim_options = sorted(df[df['servicio'] == servicio_sim]['situacion'].dropna().unique())
+            situacion_sim = st.selectbox(
+                "Situación:",
+                options=situaciones_sim_options,
+                key="situacion_sim"
+            ) if situaciones_sim_options else None
+        
+        with col_sim2:
+            localidad_sim = st.selectbox(
+                "Localidad:",
+                options=sorted(df['sector_localidad'].dropna().unique()),
+                key="localidad_sim"
+            )
+            
+            fecha_ingreso_sim = st.date_input(
+                "Fecha de ingreso:",
+                value=datetime.now().date(),
+                key="fecha_sim"
+            )
+            hora_ingreso_sim = st.time_input(
+                "Hora de ingreso:",
+                value=datetime.now().time(),
+                key="hora_sim"
+            )
+        
+        if situacion_sim:
+            # Combinar fecha y hora
+            fecha_completa = datetime.combine(fecha_ingreso_sim, hora_ingreso_sim)
+            
+            # Preprocesar datos para predicción
+            try:
+                Xnew = preprocess_for_prediction(df, servicio_sim, situacion_sim, localidad_sim, fecha_completa)
+                
+                # Realizar predicción
+                pred = model.predict(Xnew)[0]
+                
+                # Mostrar predicción
+                st.markdown("---")
+                st.markdown(f"## 🧩 Predicción del modelo: **{pred}**")
+                
+                # Rango de días esperado
+                rangos = {
+                    'Rápida': 'entre 1 y 4 días',
+                    'Normal': 'entre 4 y 12 días',
+                    'Lenta': 'más de 12 días'
+                }
+                if pred in rangos:
+                    st.info(f"⏱️ **Tiempo estimado de resolución:** {rangos[pred]}")
+                
+                # Explicación de la predicción
+                st.markdown("### 📝 Explicación de la predicción")
+                
+                # Determinar tipo histórico de la situación
+                tipo_sit = None
+                if 'duracion_situacion' in df.columns:
+                    try:
+                        modo_sit = df[df['situacion'] == situacion_sim]['duracion_situacion'].mode()
+                        if not modo_sit.empty:
+                            ms = modo_sit.iloc[0]
+                            if isinstance(ms, str):
+                                ms_norm = ms.strip().capitalize()
+                                if ms_norm in ['Rápida', 'Normal', 'Lenta']:
+                                    tipo_sit = ms_norm
+                                else:
+                                    try:
+                                        tipo_sit = clasificar_por_num(float(ms))
+                                    except:
+                                        tipo_sit = None
+                            else:
+                                tipo_sit = clasificar_por_num(ms)
+                    except:
+                        tipo_sit = None
+                
+                if tipo_sit is None:
+                    try:
+                        avg_sit = df[df['situacion'] == situacion_sim]['duracion_dias'].mean()
+                        if not np.isnan(avg_sit):
+                            tipo_sit = clasificar_por_num(avg_sit)
+                    except:
+                        tipo_sit = None
+                
+                # Determinar tipo histórico de la localidad
+                tipo_loc = None
+                if 'duracion_localidad' in df.columns:
+                    try:
+                        modo_loc = df[df['sector_localidad'] == localidad_sim]['duracion_localidad'].mode()
+                        if not modo_loc.empty:
+                            ml = modo_loc.iloc[0]
+                            if isinstance(ml, str):
+                                ml_norm = ml.strip().capitalize()
+                                if ml_norm in ['Rápida', 'Normal', 'Lenta']:
+                                    tipo_loc = ml_norm
+                                else:
+                                    try:
+                                        tipo_loc = clasificar_por_num(float(ml))
+                                    except:
+                                        tipo_loc = None
+                            else:
+                                tipo_loc = clasificar_por_num(ml)
+                    except:
+                        tipo_loc = None
+                
+                if tipo_loc is None:
+                    try:
+                        avg_loc = df[df['sector_localidad'] == localidad_sim]['duracion_dias'].mean()
+                        if not np.isnan(avg_loc):
+                            tipo_loc = clasificar_por_num(avg_loc)
+                    except:
+                        tipo_loc = None
+                
+                tipo_sit = tipo_sit if tipo_sit is not None else 'Desconocido'
+                tipo_loc = tipo_loc if tipo_loc is not None else 'Desconocido'
+                
+                # Descripciones
+                descripcion_sit = {
+                    'Rápida': "la situación suele resolverse en poco tiempo, generalmente antes de los 4 días.",
+                    'Normal': "la situación tiene tiempos de resolución intermedios, de entre 4 y 12 días.",
+                    'Lenta': "la situación suele demorar más de lo habitual, superando los 12 días en promedio.",
+                    'Desconocido': "no hay información histórica suficiente para caracterizar la situación."
+                }
+                
+                descripcion_loc = {
+                    'Rápida': "la localidad tiene un historial de resolución ágil, con reclamos que se resuelven en menos de 4 días.",
+                    'Normal': "la localidad presenta tiempos de atención promedio, habitualmente de entre 4 y 12 días.",
+                    'Lenta': "la localidad suele tener demoras en la resolución de reclamos, superando los 12 días.",
+                    'Desconocido': "no hay información histórica suficiente sobre la localidad."
+                }
+                
+                # Interpretación
+                if (tipo_sit == 'Lenta' and tipo_loc == 'Rápida' and pred == 'Normal'):
+                    razon = "aunque la situación reportada tiende a ser lenta, el comportamiento histórico de la localidad ayuda a reducir los tiempos."
+                elif (tipo_sit == 'Rápida' and tipo_loc == 'Lenta' and pred == 'Normal'):
+                    razon = "aunque la localidad suele presentar demoras, la naturaleza de la situación tiende a resolverse más rápido de lo habitual."
+                elif tipo_sit == pred and tipo_loc == pred:
+                    razon = "la predicción coincide con los historiales tanto de la situación como de la localidad."
+                elif tipo_sit == pred:
+                    razon = "la predicción está principalmente influenciada por el comportamiento histórico de la situación."
+                elif tipo_loc == pred:
+                    razon = "la predicción está principalmente influenciada por el desempeño histórico de la localidad."
+                else:
+                    razon = "la predicción combina múltiples patrones observados en los datos."
+                
+                explicacion = (
+                    f"🕐 Según el modelo, el plazo estimado de resolución será **{rangos.get(pred, 'N/A')}**.\n\n"
+                    f"Esto se debe a que **{descripcion_sit.get(tipo_sit, '')}** "
+                    f"Además, **{descripcion_loc.get(tipo_loc, '')}** "
+                    f"En conjunto, {razon} Por ello, el reclamo se clasifica como una resolución **{str(pred).lower()}**."
+                )
+                
+                st.markdown(explicacion)
+                
+                # Probabilidades
+                if hasattr(model, "predict_proba"):
+                    proba = model.predict_proba(Xnew)[0]
+                    proba_df = pd.DataFrame({
+                        'Categoría': model.classes_,
+                        'Probabilidad': proba
+                    })
+                    
+                    # Ordenar según orden semáforo
+                    order = ['Rápida', 'Normal', 'Lenta']
+                    proba_df['order'] = proba_df['Categoría'].apply(lambda x: order.index(x) if x in order else 99)
+                    proba_df = proba_df.sort_values('order').drop(columns='order')
+                    
+                    st.markdown("### 📊 Probabilidades por categoría")
+                    
+                    # Gráfico de barras (no torta)
+                    chart_proba = (
+                        alt.Chart(proba_df)
+                        .mark_bar()
+                        .encode(
+                            x=alt.X('Categoría:N', title='Categoría', sort=['Rápida', 'Normal', 'Lenta']),
+                            y=alt.Y('Probabilidad:Q', title='Probabilidad', axis=alt.Axis(format='%')),
+                            color=alt.Color('Categoría:N',
+                                            scale=alt.Scale(domain=['Rápida','Normal','Lenta'],
+                                                            range=['#2ECC71','#F1C40F','#E74C3C']),
+                                            legend=None),
+                            tooltip=[
+                                alt.Tooltip('Categoría:N', title='Categoría'),
+                                alt.Tooltip('Probabilidad:Q', format='.2%', title='Probabilidad')
+                            ]
+                        )
+                        .properties(width=500, height=300, title="Probabilidades por categoría")
+                    )
+                    st.altair_chart(chart_proba, use_container_width=True)
+                    
+                    # Tabla de probabilidades
+                    st.dataframe(
+                        proba_df.assign(Probabilidad=lambda d: (d["Probabilidad"]*100).round(2).astype(str) + " %"),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                
+            except Exception as e:
+                st.error(f"❌ Error al realizar la predicción: {str(e)}")
+                st.exception(e)
+
+# ==========================================================
+# TAB 3: INFORMACIÓN DEL MODELO
+# ==========================================================
+with tab3:
+    st.header("ℹ️ Información del Modelo")
+    
+    if model is None:
+        st.warning("⚠️ No se encontró el modelo. Subí **model.pkl** para ver la información.")
+    else:
+        # Tipo de modelo
+        st.subheader("🔧 Tipo de Modelo")
+        if hasattr(model, 'named_steps'):
+            clf = model.named_steps.get('clf', None)
+            if clf is not None:
+                st.info(f"**Modelo:** {type(clf).__name__}")
+                if hasattr(clf, 'n_estimators'):
+                    st.write(f"- **Número de árboles:** {clf.n_estimators}")
+                if hasattr(clf, 'min_samples_split'):
+                    st.write(f"- **Min samples split:** {clf.min_samples_split}")
+                if hasattr(clf, 'class_weight'):
+                    st.write(f"- **Class weight:** {clf.class_weight}")
+                if hasattr(clf, 'random_state'):
+                    st.write(f"- **Random state:** {clf.random_state}")
+            else:
+                st.write(f"**Modelo:** {type(model).__name__}")
+        else:
+            st.write(f"**Modelo:** {type(model).__name__}")
+        
+        # Métricas (si están disponibles en el dataset)
+        st.subheader("📊 Métricas de Evaluación")
+        st.markdown("""
+        Para calcular las métricas de evaluación, necesitaríamos los datos de test.
+        Si tienes acceso a `y_test` y `y_pred`, puedes calcularlas aquí.
+        """)
+        
+        # Importancia de variables
+        st.subheader("🔍 Importancia de Variables")
+        if hasattr(model, 'named_steps'):
+            clf = model.named_steps.get('clf', None)
+            pre = model.named_steps.get('pre', None)
+            
+            if clf is not None and hasattr(clf, 'feature_importances_') and pre is not None:
+                try:
+                    # Obtener nombres de features transformadas
+                    # Necesitamos crear un X de ejemplo para obtener los nombres
+                    X_sample = df[SIM_FEATURES].head(1)
+                    feature_names = pre.get_feature_names_out(X_sample.columns)
+                    
+                    # Crear DataFrame con importancias
+                    importances = pd.Series(clf.feature_importances_, index=feature_names)
+                    top_features = importances.sort_values(ascending=False).head(20)
+                    
+                    # Gráfico de importancia
+                    chart_importance = (
+                        alt.Chart(top_features.reset_index().rename(columns={'index': 'Variable', 0: 'Importancia'}))
+                        .mark_bar()
+            .encode(
+                            x=alt.X('Importancia:Q', title='Importancia'),
+                            y=alt.Y('Variable:N', sort='-x', title='Variable'),
+                            tooltip=['Variable:N', 'Importancia:Q']
+                        )
+                        .properties(width=700, height=500, title="Top 20 variables más importantes")
+                    )
+                    st.altair_chart(chart_importance, use_container_width=True)
+                    
+                    # Tabla de importancia
+                    st.dataframe(
+                        top_features.reset_index().rename(columns={'index': 'Variable', 0: 'Importancia'})
+                        .assign(Importancia=lambda d: d["Importancia"].round(4)),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                except Exception as e:
+                    st.warning(f"No se pudieron obtener las importancias: {str(e)}")
+            else:
+                st.info("El modelo no tiene información de importancia de variables disponible.")
+        
+        # Información adicional
+        st.subheader("📚 Información Adicional")
+        st.markdown("""
+        **Categorías de duración:**
+        - 🟢 **Rápida**: menos de 4 días (0-4 días)
+        - 🟡 **Normal**: entre 4 y 12 días (4-12 días)
+        - 🔴 **Lenta**: más de 12 días (>12 días)
+        
+        **Features utilizadas:**
+        - **Categóricas:** servicio, situación, duracion_situacion, sector_localidad, duracion_localidad
+        - **Temporales cíclicas:** mes, día de semana, hora, día del año (codificación sin/cos)
+        - **Carga operativa:** carga por servicio en diferentes períodos temporales
+        """)
 
