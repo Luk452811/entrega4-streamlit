@@ -588,13 +588,13 @@ with tab2:
 # TAB 3: INFORMACIÓN DEL MODELO
 # ==========================================================
 with tab3:
-    st.header("ℹInformación del Modelo")
+    st.header("Información del Modelo")
     
     if model is None:
         st.warning("⚠️ No se encontró el modelo. Subí **model.pkl** para ver la información.")
     else:
         # Tipo de modelo
-        st.subheader("🔧 Tipo de Modelo")
+        st.subheader("Tipo de Modelo")
         if hasattr(model, 'named_steps'):
             clf = model.named_steps.get('clf', None)
             if clf is not None:
@@ -616,7 +616,7 @@ with tab3:
             st.write(f"**Modelo:** {type(model).__name__}")
         
         # Matriz de Confusión (IMAGEN)
-        st.subheader("📊 Performance del Modelo (Matriz de Confusión)")
+        st.subheader("Performance del Modelo (Matriz de Confusión)")
         st.markdown("""
         A continuación se muestra la matriz de confusión del modelo.
         """)
@@ -627,7 +627,7 @@ with tab3:
             st.warning("⚠️ No se encontró la imagen 'matriz-confusion.png'. Asegúrate de que esté en el directorio raíz.")
 
         # Importancia de variables (IMAGEN)
-        st.subheader("🔍 Importancia de Variables")
+        st.subheader("Importancia de Variables")
         st.markdown("""
         A continuación se muestran las variables más relevantes para la predicción del modelo.
         """)
@@ -639,7 +639,7 @@ with tab3:
         
         # Información adicional
         st.markdown("---")
-        st.subheader("📚 Información Adicional")
+        st.subheader("Información Adicional")
         st.markdown("""
         **Categorías de duración:**
         - 🟢 **Rápida**: menos de 4 días (0-4 días)
