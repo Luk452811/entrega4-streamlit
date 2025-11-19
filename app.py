@@ -196,7 +196,7 @@ with tab1:
 
     # --- 1. GRÁFICO DE CONTROL (DISTRIBUCIÓN) ---
     with c_row1_col1:
-        st.subheader("🕒 Distribución general")
+        st.subheader("Distribución general")
         if serv_sel: st.caption(f"Filtrado por Servicio: **{serv_sel}**")
         else: st.caption("👇 **Haz clic en una barra** para filtrar por categoría.")
         
@@ -222,7 +222,7 @@ with tab1:
 
     # --- 2. GRÁFICO DE LOCALIDADES (Afectado por AMBOS) ---
     with c_row1_col2:
-        st.subheader("🏙️ Duración por Localidad")
+        st.subheader("Duración por Localidad")
         if not df_kpi.empty:
             # Preparar datos: Promedio de días por localidad, ordenado descendente
             df_loc = df_kpi.groupby('sector_localidad')['duracion_dias'].mean().reset_index()
@@ -269,7 +269,7 @@ with tab1:
 
     # --- 3. GRÁFICO DE SERVICIOS (FILTRO SECUNDARIO) ---
     with c_row2_col1:
-        titulo_serv = f"⚙️ Top Servicios ({cat_sel if cat_sel else 'General'})"
+        titulo_serv = f"Top Servicios ({cat_sel if cat_sel else 'General'})"
         st.subheader(titulo_serv)
         if cat_sel: st.caption(f"Filtrado por Categoría: **{cat_sel}**")
         else: st.caption("👇 **Haz clic en una barra** para filtrar por servicio.")
@@ -296,7 +296,7 @@ with tab1:
 
     # --- 4. GRÁFICO DE SITUACIONES (Afectado por AMBOS) ---
     with c_row2_col2:
-        titulo_sit = f"📋 Top Situaciones ({serv_sel if serv_sel else (cat_sel if cat_sel else 'General')})"
+        titulo_sit = f"Top Situaciones ({serv_sel if serv_sel else (cat_sel if cat_sel else 'General')})"
         st.subheader(titulo_sit)
         
         if not df_kpi.empty:
@@ -308,7 +308,7 @@ with tab1:
 
             chart_sit = alt.Chart(df_sit).mark_bar(color=color_bar).encode(
                 x=alt.X('cantidad', title='Cantidad de Reclamos'),
-                y=alt.Y('situacion', sort='-x', title=None),
+                y=alt.Y('situacion', sort='-x', title=None, axis=alt.Axis(labelLimit=400)),
                 tooltip=['situacion', 'cantidad']
             ).properties(height=350)
             st.altair_chart(chart_sit, width='stretch')
@@ -326,7 +326,7 @@ with tab1:
         st.info("💡 Haz clic en los gráficos de **Distribución** y **Servicios** para filtrar.")
 
     # Gráfico de evolución
-    st.subheader("📈 Evolución Anual")
+    st.subheader("Evolución Anual")
     
     c_ev1, c_ev2 = st.columns(2)
     
@@ -369,7 +369,7 @@ with tab1:
 # TAB 2: SIMULADOR
 # ==========================================================
 with tab2:
-    st.header("🎛️ Simulador Interactivo de Predicción")
+    st.header("Simulador Interactivo de Predicción")
     
     if model is None:
         st.warning("⚠️ No se encontró el modelo. Subí **model.pkl** para habilitar el simulador.")
@@ -417,7 +417,7 @@ with tab2:
                 
                 # Mostrar predicción
                 st.markdown("---")
-                st.markdown(f"## 🧩 Predicción del modelo: **{pred}**")
+                st.markdown(f"## Predicción del modelo: **{pred}**")
                 
                 # Rango de días esperado
                 rangos = {
@@ -426,10 +426,10 @@ with tab2:
                     'Lenta': 'más de 12 días'
                 }
                 if pred in rangos:
-                    st.info(f"⏱️ **Tiempo estimado de resolución:** {rangos[pred]}")
+                    st.info(f"⏱**Tiempo estimado de resolución:** {rangos[pred]}")
                 
                 # Explicación de la predicción
-                st.markdown("### 📝 Explicación de la predicción")
+                st.markdown("### Explicación de la predicción")
                 
                 # Determinar tipo histórico de la situación
                 tipo_sit = None
@@ -508,24 +508,32 @@ with tab2:
                 }
                 
                 # Interpretación
-                if (tipo_sit == 'Lenta' and tipo_loc == 'Rápida' and pred == 'Normal'):
-                    razon = "aunque la situación reportada tiende a ser lenta, el comportamiento histórico de la localidad ayuda a reducir los tiempos."
-                elif (tipo_sit == 'Rápida' and tipo_loc == 'Lenta' and pred == 'Normal'):
-                    razon = "aunque la localidad suele presentar demoras, la naturaleza de la situación tiende a resolverse más rápido de lo habitual."
-                elif tipo_sit == pred and tipo_loc == pred:
-                    razon = "la predicción coincide con los historiales tanto de la situación como de la localidad."
-                elif tipo_sit == pred:
-                    razon = "la predicción está principalmente influenciada por el comportamiento histórico de la situación."
-                elif tipo_loc == pred:
-                    razon = "la predicción está principalmente influenciada por el desempeño histórico de la localidad."
-                else:
-                    razon = "la predicción combina múltiples patrones observados en los datos."
+                # Definimos componentes de la explicación basados en tus variables más importantes
+
+                # 1. Factor de Carga (Basado en num__carga_servicio_...)
+                texto_carga = "la alta demanda de servicios en este momento" 
+                # O "la disponibilidad actual de nuestras cuadrillas" si la carga es baja.
+
+                # 2. Factor Temporal (Basado en num__dia_año y hora)
+                texto_tiempo = "la época del año" 
+                # O "el horario en que se ingresa el reporte".
+
+                # 3. Factor del Tipo de Problema (cat__servicio...)
+                texto_tipo = f"la naturaleza del problema"
+
+                # --- CONSTRUCCIÓN DE LA RESPUESTA PARA EL CIUDADANO ---
+
+                razon = (
+                    f"Sin embargo otros factores a tener en cuenta se calculan analizando {texto_carga}, "
+                    f"{texto_tiempo} y {texto_tipo}. "
+                    "El sistema aprende de miles de casos históricos para darte una fecha realista."
+                )
                 
                 explicacion = (
                     f"🕐 Según el modelo, el plazo estimado de resolución será **{rangos.get(pred, 'N/A')}**.\n\n"
-                    f"Esto se debe a que **{descripcion_sit.get(tipo_sit, '')}** "
-                    f"Además, **{descripcion_loc.get(tipo_loc, '')}** "
-                    f"En conjunto, {razon} Por ello, el reclamo se clasifica como una resolución **{str(pred).lower()}**."
+                    f"Análisis: Por un lado **{descripcion_sit.get(tipo_sit, '')}** "
+                    f"Por otro, **{descripcion_loc.get(tipo_loc, '')}** "
+                    f"{razon} Por ello, el reclamo se clasifica como una resolución **{str(pred).lower()}**."
                 )
                 
                 st.markdown(explicacion)
@@ -543,7 +551,7 @@ with tab2:
                     proba_df['order'] = proba_df['Categoría'].apply(lambda x: order.index(x) if x in order else 99)
                     proba_df = proba_df.sort_values('order').drop(columns='order')
                     
-                    st.markdown("### 📊 Probabilidades por categoría")
+                    st.markdown("### Probabilidades por categoría")
                     
                     # Gráfico de barras (no torta)
                     chart_proba = (
@@ -580,7 +588,7 @@ with tab2:
 # TAB 3: INFORMACIÓN DEL MODELO
 # ==========================================================
 with tab3:
-    st.header("ℹ️ Información del Modelo")
+    st.header("ℹInformación del Modelo")
     
     if model is None:
         st.warning("⚠️ No se encontró el modelo. Subí **model.pkl** para ver la información.")
