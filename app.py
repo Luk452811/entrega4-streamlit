@@ -5,7 +5,7 @@ import joblib
 import altair as alt
 import matplotlib.pyplot as plt
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import sklearn.compose._column_transformer as ct_module
 import gdown
 import os
@@ -404,7 +404,7 @@ with tab2:
             )
             
             # Se toma la fecha y hora actual automáticamente
-            fecha_completa = datetime.now()
+            fecha_completa = datetime.now() - timedelta(hours=3)
             st.info(f"📅 Fecha de simulación: **{fecha_completa.strftime('%d/%m/%Y %H:%M')}**")
         
         if situacion_sim:
