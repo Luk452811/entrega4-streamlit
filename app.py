@@ -216,7 +216,7 @@ with tab1:
             ).properties(height=300)
 
             # Usamos 'key' para persistir la selección en session_state
-            st.altair_chart(chart_dist, use_container_width=True, on_select="rerun", key="chart_dist")
+            st.altair_chart(chart_dist, width='stretch', on_select="rerun", key="chart_dist")
         else:
             st.info("Sin datos para mostrar.")
 
@@ -263,7 +263,7 @@ with tab1:
                 title=f"Días Promedio por Localidad ({serv_sel if serv_sel else (cat_sel if cat_sel else 'General')})"
             )
             
-            st.altair_chart(chart_loc, use_container_width=True)
+            st.altair_chart(chart_loc, width='stretch')
         else:
             st.warning("No hay datos para mostrar con los filtros actuales.")
 
@@ -290,7 +290,7 @@ with tab1:
                 alt.selection_point(name="chart_serv", fields=['servicio'])
             ).properties(height=350)
             
-            st.altair_chart(chart_serv, use_container_width=True, on_select="rerun", key="chart_serv")
+            st.altair_chart(chart_serv, width='stretch', on_select="rerun", key="chart_serv")
         else:
             st.info("Sin datos.")
 
@@ -311,7 +311,7 @@ with tab1:
                 y=alt.Y('situacion', sort='-x', title=None),
                 tooltip=['situacion', 'cantidad']
             ).properties(height=350)
-            st.altair_chart(chart_sit, use_container_width=True)
+            st.altair_chart(chart_sit, width='stretch')
         else:
             st.info("Sin datos.")
 
@@ -343,7 +343,7 @@ with tab1:
                 y=alt.Y('duracion_dias', title='Duración Promedio (días)', scale=alt.Scale(domain=domain_dur)),
                 tooltip=['anio', alt.Tooltip('duracion_dias', format='.1f')]
             ).properties(height=250)
-            st.altair_chart(chart_ev_dur, use_container_width=True)
+            st.altair_chart(chart_ev_dur, width='stretch')
         else:
             st.info("Sin datos.")
 
@@ -361,7 +361,7 @@ with tab1:
                 y=alt.Y('cantidad', title='Cantidad de Reclamos', scale=alt.Scale(domain=domain_qty)),
                 tooltip=['anio', 'cantidad']
             ).properties(height=250)
-            st.altair_chart(chart_ev_qty, use_container_width=True)
+            st.altair_chart(chart_ev_qty, width='stretch')
         else:
             st.info("Sin datos.")
 
@@ -563,12 +563,12 @@ with tab2:
                         )
                         .properties(width=500, height=300, title="Probabilidades por categoría")
                     )
-                    st.altair_chart(chart_proba, use_container_width=True)
+                    st.altair_chart(chart_proba, width='stretch')
                     
                     # Tabla de probabilidades
                     st.dataframe(
                         proba_df.assign(Probabilidad=lambda d: (d["Probabilidad"]*100).round(2).astype(str) + " %"),
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True
                     )
                 
