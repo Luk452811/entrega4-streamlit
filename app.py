@@ -283,7 +283,7 @@ with tab1:
 
             chart_serv = alt.Chart(df_serv).mark_bar(color=color_bar).encode(
                 x=alt.X('cantidad', title='Cantidad de Reclamos'),
-                y=alt.Y('servicio', sort='-x', title=None),
+                y=alt.Y('servicio', sort='-x', title=None, axis=alt.Axis(labelLimit=600)),
                 tooltip=['servicio', 'cantidad'],
                 opacity=alt.condition(alt.selection_point(name="chart_serv"), alt.value(1), alt.value(0.3))
             ).add_params(
@@ -308,7 +308,7 @@ with tab1:
 
             chart_sit = alt.Chart(df_sit).mark_bar(color=color_bar).encode(
                 x=alt.X('cantidad', title='Cantidad de Reclamos'),
-                y=alt.Y('situacion', sort='-x', title=None, axis=alt.Axis(labelLimit=400)),
+                y=alt.Y('situacion', sort='-x', title=None, axis=alt.Axis(labelLimit=800, labelFontSize=9)),
                 tooltip=['situacion', 'cantidad']
             ).properties(height=350)
             st.altair_chart(chart_sit, width='stretch')
